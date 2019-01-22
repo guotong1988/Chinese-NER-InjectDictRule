@@ -2,7 +2,7 @@
 import sys
 # reload(sys)
 # sys.setdefaultencoding('utf-8')
-
+import tensorflow as tf
 import re
 import os
 import csv
@@ -44,31 +44,30 @@ def getEmbedding(infile_path="embedding"):
 
     return emb_matrix
 
-def nextBatch(X, y, X_tag, y_intent,start_index, batch_size=128):
+def nextBatch(X, y, X_tag, y_intent, seq_len, start_index, batch_size=128):
     last_index = start_index + batch_size
     X_batch = list(X[start_index:min(last_index, len(X))])
-    #print("X_batch",X_batch)
+    seq_len_batch = list(seq_len[start_index:min(last_index, len(X))])
     y_batch = list(y[start_index:min(last_index, len(X))])
     X_tag_batch = list(X_tag[start_index:min(last_index, len(X))])
     y_intent_batch = list(y_intent[start_index:min(last_index, len(X))])
-    #print("y_intent_batch",y_intent_batch)
 
     if last_index > len(X):
         left_size = last_index - (len(X))
         for i in range(left_size):
             index = np.random.randint(len(X))
             X_batch.append(X[index])
+            seq_len_batch.append(seq_len[index])
             y_batch.append(y[index])
             X_tag_batch.append(X_tag[index])
             y_intent_batch.append(y_intent[index])
 
     X_batch = np.array(X_batch)
+    seq_len_batch = np.array(seq_len_batch)
     y_batch = np.array(y_batch)
     X_tag_batch = np.array(X_tag_batch)
     y_intent_batch = np.array(y_intent_batch)
-    #print("X_batch",X_batch)
-    #print("y_intent_batch",y_intent_batch)
-    return X_batch, y_batch, X_tag_batch, y_intent_batch
+    return X_batch, y_batch, X_tag_batch, y_intent_batch, seq_len_batch
 
 def nextRandomBatch(X, y, X_tag, y_intent, batch_size=128):
     X_batch = []
@@ -104,7 +103,7 @@ def prepare(chars, labels, seq_max_len, is_padding=True):
     y = []
     tmp_x = []
     tmp_y = []
-
+    seq_len = []
     for record in zip(chars, labels):
         c = record[0]
         l = record[1]
@@ -113,6 +112,7 @@ def prepare(chars, labels, seq_max_len, is_padding=True):
             if len(tmp_x) <= seq_max_len:
                 X.append(tmp_x)
                 y.append(tmp_y)
+                seq_len.append(len(tmp_x))
             tmp_x = []
             tmp_y = []
         else:
@@ -124,7 +124,7 @@ def prepare(chars, labels, seq_max_len, is_padding=True):
         X = np.array(X)
     y = np.array(padding(y, seq_max_len))
 
-    return X, y
+    return X, y, np.array(seq_len)
 
 def extract_entity(sentence, labels):
     entitys = []
@@ -461,10 +461,8 @@ def get_train(train_path, val_path, input_tag_path, val_tag_path, input_intent_p
     # map the char and label into id
     df_train["char_id"] = df_train.char.map(lambda x : -1 if str(x) == str(np.nan) else char2id[x])
     df_train["label_id"] = df_train.label.map(lambda x : -1 if str(x) == str(np.nan) else label2id[x])
-    #print(df_train["label_id"])
     # convert the data in maxtrix
-    X, y = prepare(df_train["char_id"], df_train["label_id"], seq_max_len)
-    #print(X,y)
+    X, y, seq_len_train = prepare(df_train["char_id"].values.tolist(), df_train["label_id"].values.tolist(), seq_max_len)
     X_tag = get_input_tag_x(input_tag_path, seq_max_len)
     y_intent = get_input_intent_y(input_intent_path)
     print(X.shape)
@@ -474,38 +472,31 @@ def get_train(train_path, val_path, input_tag_path, val_tag_path, input_intent_p
     indexs = np.arange(num_samples)
     np.random.shuffle(indexs)
     X = X[indexs]
-    #print("X",X)
     y = y[indexs]
     X_tag = X_tag[indexs]
     y_intent = y_intent[indexs]
-    #print("y_intent",y_intent)
-
 
     if val_path is None:
         # split the data into train and validation set
         X_train = X[:int(num_samples * train_val_ratio)]
-        #print("X_train",X_train)
         y_train = y[:int(num_samples * train_val_ratio)]
         X_tag_train = X_tag[:int(num_samples * train_val_ratio)]
         y_intent_train = y_intent[:int(num_samples * train_val_ratio)]
-        #print("y_intent_train",y_intent_train)
 
         X_val = X[int(num_samples * train_val_ratio):]
-        #print("X_val",X_val)
         y_val = y[int(num_samples * train_val_ratio):]
         X_tag_val = X_tag[int(num_samples * train_val_ratio):]
         y_intent_val = y_intent[int(num_samples * train_val_ratio):]
-        #print("y_intent_val",y_intent_val)
     else:
         X_train = X
         y_train = y
         X_tag_train = X_tag
         y_intent_train = y_intent
-        X_val, y_val, X_tag_val, y_intent_val = get_test(val_path, val_tag_path, valid_intent_path, is_validation=True, seq_max_len=seq_max_len)
+        X_val, y_val, X_tag_val, y_intent_val, seq_len_valid = get_test(val_path, val_tag_path, valid_intent_path, is_validation=True, seq_max_len=seq_max_len)
 
     print("train size: %d, validation size: %d" %(len(X_train), len(y_val)))
 
-    return X_train, y_train, X_val, y_val, X_tag_train, X_tag_val, y_intent_train, y_intent_val
+    return X_train, y_train, X_val, y_val, X_tag_train, X_tag_val, y_intent_train, y_intent_val, seq_len_train, seq_len_valid
 
 def get_test(test_path="test.in", test_tag_path="./song_test_char", test_intent_path="./test_intent", is_validation=False, seq_max_len=30):
     char2id, id2char = loadMap("meta_data/char2id")
@@ -533,18 +524,18 @@ def get_test(test_path="test.in", test_tag_path="./song_test_char", test_intent_
     df_test["label_id"] = df_test.label.map(lambda x : labelMapFunc(x, label2id))
 
     if is_validation:
-        X_test, y_test = prepare(df_test["char_id"], df_test["label_id"], seq_max_len)
+        X_test, y_test, seq_len_test = prepare(df_test["char_id"].values.tolist(), df_test["label_id"].values.tolist(), seq_max_len)
         X_test_tag = get_input_tag(test_tag_path, seq_max_len)
         y_intent_test = get_input_intent(test_intent_path)
-        return X_test, y_test, X_test_tag, y_intent_test
+        return X_test, y_test, X_test_tag, y_intent_test, seq_len_test
     else:
         df_test["char"] = df_test.char.map(lambda x : -1 if str(x) == str(np.nan) else x)
-        X_test, y_test = prepare(df_test["char_id"], df_test["label_id"], seq_max_len)
-        X_test_str, y_test_str = prepare(df_test["char"], df_test["label"], seq_max_len, is_padding=False)
+        X_test, y_test, seq_len_test = prepare(df_test["char_id"].values.tolist(), df_test["label_id"].values.tolist(), seq_max_len)
+        X_test_str, y_test_str, _ = prepare(df_test["char"].values.tolist(), df_test["label"].values.tolist(), seq_max_len, is_padding=False)
         X_test_tag = get_input_tag(test_tag_path, seq_max_len)
         y_intent_test = get_input_intent(test_intent_path)
         print("test size: %d" %(len(X_test)))
-        return X_test, X_test_str, X_test_tag, y_test_str, y_intent_test, y_test
+        return X_test, X_test_str, X_test_tag, y_test_str, y_intent_test, y_test, seq_len_test
 
 def get_transition(y_train_batch):
     transition_batch = []
@@ -561,6 +552,17 @@ def get_transition(y_train_batch):
     transition_batch = np.array(transition_batch)
     return transition_batch
 
+
+def collect_final_step_of_lstm(lstm_representation, lengths):
+    # lstm_representation: [batch_size, passsage_length, dim]
+    # lengths: [batch_size]
+    lengths = tf.maximum(lengths, tf.zeros_like(lengths, dtype=tf.int32))
+
+    batch_size = tf.shape(lengths)[0]
+    batch_nums = tf.range(0, limit=batch_size) # shape (batch_size)
+    indices = tf.stack((batch_nums, lengths), axis=1) # shape (batch_size, 2)
+    result = tf.gather_nd(lstm_representation, indices, name='last-forwar-lstm')
+    return result # [batch_size, dim]
 
 if __name__ == "__main__":
     #in_tag = "./train_merge_BME"

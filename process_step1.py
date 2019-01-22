@@ -233,8 +233,8 @@ if __name__=="__main__":
     singerset = readfile("raw_data/singer_set.txt")
     songset = readfile("raw_data/song_set.txt")
     styleset = readfile("raw_data/style_set.txt")
-    writeShuffle("raw_data/train_pattern.txt",singerset,songset,styleset,"processed_data/train_BME","processed_data/train_char_label")
-    writeShuffle("raw_data/test_pattern.txt",singerset,songset,styleset,"processed_data/test_BME","processed_data/test_char_label")
+    writeShuffle("raw_data/train_pattern.txt",singerset,songset,styleset,"processed1/train_BME","processed1/train_char_label")
+    writeShuffle("raw_data/test_pattern.txt",singerset,songset,styleset,"processed1/test_BME","processed1/test_char_label")
     #writeWithLabel("train.txt",singerset,songset,styleset,"train_merge_char_label")
     #print maxl
     print("write finish")

@@ -55,7 +55,7 @@ config = tf.ConfigProto(allow_soft_placement=True)
 with tf.Session(config=config) as sess:
         initializer = tf.random_uniform_initializer(-0.1, 0.1)
         with tf.variable_scope("model", reuse=None, initializer=initializer):
-            model = BILSTM_CRF(num_chars=num_chars, num_classes=num_classes, num_intent_classes=num_intent_classes, num_steps=num_steps, embedding_matrix=embedding_matrix, is_training=False)
+            model = BILSTM_CRF(num_chars=num_chars, num_slot_class=num_classes, num_intent_classes=num_intent_classes, num_steps=num_steps, embedding_matrix=embedding_matrix, is_training=False)
 
         print("loading model parameter")
         saver = tf.train.Saver()

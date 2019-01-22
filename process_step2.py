@@ -353,8 +353,8 @@ if __name__=="__main__":
     #singerset = readfile("singer_set.txt")
     #songset = readfile("song_set.txt")
     #styleset = readfile("style_set.txt")
-    writeShuffle("processed_data/train_BME","process_process_data/final_train_BME")
-    writeShuffle("processed_data/test_BME","process_process_data/final_test_BME")
+    writeShuffle("processed1/train_BME","processed2/train_BME")
+    writeShuffle("processed1/test_BME","processed2/test_BME")
     #print maxl
    
     print("write finish")

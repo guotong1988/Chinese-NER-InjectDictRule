@@ -222,9 +222,9 @@ def getBMEtag(data,tag, sent):
     return datatag
 
 
-def writeShuffle(max, fileName, input_label_name, output_intent_filename, sentoutName, labeloutName):
+def writeShuffle(max, input_file_name, input_label_name, output_intent_filename, sentoutName, labeloutName):
     whole=[]
-    file = open(fileName,mode="r",encoding="utf-8")
+    file = open(input_file_name, mode="r", encoding="utf-8")
     labelfile = open(input_label_name, mode="r", encoding="utf-8")
     sentout = open(sentoutName,mode='w',encoding="utf-8")
     intentfile = open(output_intent_filename, mode='w', encoding="utf-8")
@@ -296,13 +296,21 @@ import os
 if __name__=="__main__":
     #writeShuffle("train.revise2.txt","train.revise2.char.prep.txt","train.label","train.slot")
     maxl=0
-    writeShuffle(maxl,"process_process_data/final_train_BME","processed_data/train_char_label","process_process_data/intent_train","process_process_data/train_BME","process_process_data/train_char_label")
-    writeShuffle(maxl,"process_process_data/final_test_BME","processed_data/test_char_label","process_process_data/intent_test","process_process_data/test_BME","process_process_data/test_char_label")
+    writeShuffle(maxl,input_file_name="processed2/train_BME",
+                 input_label_name="processed1/train_char_label",
+                 output_intent_filename="processed3/intent_train",
+                 sentoutName="processed3/train_BME",
+                 labeloutName="processed3/train_char_label")
+    writeShuffle(maxl,input_file_name="processed2/test_BME",
+                 input_label_name="processed1/test_char_label",
+                 output_intent_filename="processed3/intent_test",
+                 sentoutName="processed3/test_BME",
+                 labeloutName="processed3/test_char_label")
     #writeShuffle("test20.revise3.txt",singerset,songset,styleset,"test_merge_BME.I","test_merge_char_label")
     #writeWithLabel("train.txt",singerset,songset,styleset,"train_merge_char_label")
     #print maxl
-    os.remove("process_process_data/train_char_label")
-    os.remove("process_process_data/test_char_label")
-    os.remove("process_process_data/train_BME")
-    os.remove("process_process_data/test_BME")
+    # os.remove("process_process_data/train_char_label")
+    # os.remove("process_process_data/test_char_label")
+    # os.remove("process_process_data/train_BME")
+    # os.remove("process_process_data/test_BME")
     print("write finish")
