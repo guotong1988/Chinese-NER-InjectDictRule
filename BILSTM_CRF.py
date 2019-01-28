@@ -1,3 +1,4 @@
+# coding=utf-8
 import math
 import helper
 import numpy as np
@@ -470,7 +471,7 @@ class BILSTM_CRF(object):
             y_hat = [id2label[val] for val in predicts[i]]
             true_labels = helper.extract_entity(x_, y)
             pred_labels = helper.extract_entity(x_, y_hat)
-            if len(true_labels) == 0 and len(pred_labels) == 0:
+            if False:#len(true_labels) == 0 and len(pred_labels) == 0: # 我们收集所有的实体了，全O的已经不要了。
                 hit_num += 1
                 pred_num += 1
                 true_num += 1
@@ -522,7 +523,7 @@ class BILSTM_CRF(object):
                 y_hat = [id2label[val] for val in y_pred[i]]
                 true_labels = helper.extract_entity(x, y)
                 pred_labels = helper.extract_entity(x, y_hat)
-                if len(true_labels)==0 and len(pred_labels)==0:
+                if False: #len(true_labels)==0 and len(pred_labels)==0: # 我们收集所有的实体了，全O的已经不要了。
                     hit_num += 1
                     pred_num += 1
                     true_num += 1
