@@ -1,4 +1,3 @@
-# coding=utf-8
 import math
 import helper
 import numpy as np
@@ -38,7 +37,7 @@ class BILSTM_CRF(object):
         self.slot_targets = tf.placeholder(tf.int32, [None, self.num_steps])
         self.targets_weight = tf.placeholder(tf.float32, [None, self.num_steps])
         self.targets_transition = tf.placeholder(tf.int32, [None])
-        self.sequence_len = tf.placeholder(tf.int32, [None])
+        #self.sequence_len = tf.placeholder(tf.int32, [None])
         self.intent_target = tf.placeholder(tf.int32, [None])
 
         # char embedding
@@ -50,8 +49,8 @@ class BILSTM_CRF(object):
             self.embedding = tf.Variable(embedding_matrix, trainable=True, name="emb", dtype=tf.float32)
 
         self.input_tag = tf.placeholder(tf.float32, [None, self.num_steps, self.input_tag_size])
-        self.inputs_emb = tf.nn.embedding_lookup(self.embedding, self.inputs)
-        self.inputs_emb = tf.concat(axis=2, values=[self.inputs_emb, self.input_tag])
+        self.input_emb = tf.nn.embedding_lookup(self.embedding, self.inputs)
+        self.input_emb = tf.concat(axis=2, values=[self.input_emb, self.input_tag])
 
         # self.inputs_emb = tf.transpose(self.inputs_emb, [1, 0, 2])
         # self.inputs_emb = tf.reshape(self.inputs_emb, [-1, self.emb_dim+self.tag_size])
@@ -70,22 +69,22 @@ class BILSTM_CRF(object):
         lstm_cell_bw = tf.nn.rnn_cell.MultiRNNCell([lstm_cell_bw] * self.num_layers)
 
         # get the length of each sample
-        # self.length = tf.reduce_sum(tf.sign(self.inputs), reduction_indices=1)
-        # self.length = tf.cast(self.length, tf.int32)
+        self.sequence_len = tf.reduce_sum(tf.sign(self.inputs), reduction_indices=1)
+        self.sequence_len = tf.cast(self.sequence_len, tf.int32)
 
         # forward and backward
         self.outputs, _ = rnn.bidirectional_dynamic_rnn(
             lstm_cell_fw,
             lstm_cell_bw,
-            self.inputs_emb,
+            self.input_emb,
             dtype=tf.float32,
             sequence_length=self.sequence_len
         )
 
-        # rnn_output1 = self.outputs[1][:,0,:]
-        rnn_output0 = helper.collect_final_step_of_lstm(self.outputs[0],self.sequence_len-1)
-        self.intent_input = rnn_output0 # tf.concat(axis=1, values=[rnn_output0,rnn_output1])
-
+        rnn_output1 = self.outputs[1][:,0,:]
+        #rnn_output0 = helper.collect_final_step_of_lstm(self.outputs[0],self.sequence_len-1)
+        self.intent_input = rnn_output1 # tf.concat(axis=1, values=[rnn_output0,rnn_output1])
+        #self.intent_input=tf.reduce_max(self.outputs[0],1)
         dense_layer = tf.layers.Dense(units=self.num_intent_class, name="intent")
         self.intent_logits = dense_layer(self.intent_input)
 
@@ -101,16 +100,12 @@ class BILSTM_CRF(object):
             self.slot_loss = tf.reduce_mean(tf.nn.softmax_cross_entropy_with_logits(self.slot_logits, self.slot_targets))
         elif crf_flag==2:
             self.tags_scores = tf.reshape(self.slot_logits, [self.batch_size, self.num_steps, self.num_slot_class])
-            self.transitions = tf.get_variable("transitions", [self.num_slot_class + 1, self.num_slot_class + 1])
+            self.transitions = tf.get_variable("transitions", [self.num_slot_class+1, self.num_slot_class+1])
 
             dummy_val = -1000
-            # class_pad = tf.Variable(dummy_val * np.ones((self.batch_size, self.num_steps, 1)), dtype=tf.float32)
             class_pad = dummy_val * tf.ones([self.batch_size, self.num_steps, 1], tf.float32)
 
             self.observations = tf.concat(axis=2, values=[self.tags_scores, class_pad])
-
-            # begin_vec = tf.Variable(np.array([[dummy_val] * self.num_classes + [0] for _ in range(self.batch_size)]), trainable=False, dtype=tf.float32)
-            # end_vec = tf.Variable(np.array([[0] + [dummy_val] * self.num_classes for _ in range(self.batch_size)]), trainable=False, dtype=tf.float32)
 
             W = tf.ones([self.batch_size, 1], tf.float32)
             begin_vec = tf.constant([dummy_val] * self.num_slot_class + [0], dtype=tf.float32)
@@ -119,8 +114,8 @@ class BILSTM_CRF(object):
             end_vec = tf.constant([0] + [dummy_val] * self.num_slot_class, dtype=tf.float32)
             end_vec = tf.multiply(W, end_vec)
 
-            begin_vec = tf.reshape(begin_vec, [self.batch_size, 1, self.num_slot_class + 1])
-            end_vec = tf.reshape(end_vec, [self.batch_size, 1, self.num_slot_class + 1])
+            begin_vec = tf.reshape(begin_vec, [self.batch_size, 1, self.num_slot_class+1])
+            end_vec = tf.reshape(end_vec, [self.batch_size, 1, self.num_slot_class+1])
 
             self.observations = tf.concat(axis=1, values=[begin_vec, self.observations, end_vec])
 
@@ -144,7 +139,7 @@ class BILSTM_CRF(object):
         elif crf_flag==3:
             slot_loss, self.transition_params = crf_log_likelihood(inputs=self.slot_logits, tag_indices=self.slot_targets, sequence_lengths=self.sequence_len)
             self.slot_loss = -tf.reduce_mean(slot_loss)
-        self.sum_loss= self.slot_loss + 200 * self.intent_loss
+        self.sum_loss= self.slot_loss + 50 * self.intent_loss
 
         self.optimizer = tf.train.AdamOptimizer(learning_rate=self.learning_rate).minimize(self.sum_loss)
 
@@ -155,33 +150,33 @@ class BILSTM_CRF(object):
 
     def forward(self, observations, transitions, length, is_viterbi=True, return_best_seq=True):
         length = tf.reshape(length, [self.batch_size])
-        transitions = tf.reshape(tf.concat(axis=0, values=[transitions] * self.batch_size), [self.batch_size, self.num_slot_class + 1, self.num_slot_class + 1])
-        observations = tf.reshape(observations, [self.batch_size, self.num_steps + 2, self.num_slot_class + 1, 1])
+        transitions = tf.reshape(tf.concat(axis=0, values=[transitions] * self.batch_size), [self.batch_size, self.num_slot_class+1, self.num_slot_class+1])
+        observations = tf.reshape(observations, [self.batch_size, self.num_steps + 2, self.num_slot_class+1, 1])
         observations = tf.transpose(observations, [1, 0, 2, 3])
         previous = observations[0, :, :, :]
         max_scores = []
         max_scores_pre = []
         alphas = [previous]
         for t in range(1, self.num_steps + 2):
-            previous = tf.reshape(previous, [self.batch_size, self.num_slot_class + 1, 1])
-            current = tf.reshape(observations[t, :, :, :], [self.batch_size, 1, self.num_slot_class + 1])
+            previous = tf.reshape(previous, [self.batch_size, self.num_slot_class+1, 1])
+            current = tf.reshape(observations[t, :, :, :], [self.batch_size, 1, self.num_slot_class+1])
             alpha_t = previous + current + transitions
             if is_viterbi:
                 max_scores.append(tf.reduce_max(alpha_t, reduction_indices=1))
                 max_scores_pre.append(tf.argmax(alpha_t, axis=1))
-            alpha_t = tf.reshape(self.logsumexp(alpha_t, axis=1), [self.batch_size, self.num_slot_class + 1, 1])
+            alpha_t = tf.reshape(self.logsumexp(alpha_t, axis=1), [self.batch_size, self.num_slot_class+1, 1])
             alphas.append(alpha_t)
             previous = alpha_t
 
-        alphas = tf.reshape(tf.concat(axis=0, values=alphas), [self.num_steps + 2, self.batch_size, self.num_slot_class + 1, 1])
+        alphas = tf.reshape(tf.concat(axis=0, values=alphas), [self.num_steps + 2, self.batch_size, self.num_slot_class+1, 1])
         alphas = tf.transpose(alphas, [1, 0, 2, 3])
-        alphas = tf.reshape(alphas, [self.batch_size * (self.num_steps + 2), self.num_slot_class + 1, 1])
+        alphas = tf.reshape(alphas, [self.batch_size * (self.num_steps + 2), self.num_slot_class+1, 1])
 
         last_alphas = tf.gather(alphas, tf.range(0, self.batch_size) * (self.num_steps + 2) + length)
-        last_alphas = tf.reshape(last_alphas, [self.batch_size, self.num_slot_class + 1, 1])
+        last_alphas = tf.reshape(last_alphas, [self.batch_size, self.num_slot_class+1, 1])
 
-        max_scores = tf.reshape(tf.concat(axis=0, values=max_scores), (self.num_steps + 1, self.batch_size, self.num_slot_class + 1))
-        max_scores_pre = tf.reshape(tf.concat(axis=0, values=max_scores_pre), (self.num_steps + 1, self.batch_size, self.num_slot_class + 1))
+        max_scores = tf.reshape(tf.concat(axis=0, values=max_scores), (self.num_steps + 1, self.batch_size, self.num_slot_class+1))
+        max_scores_pre = tf.reshape(tf.concat(axis=0, values=max_scores_pre), (self.num_steps + 1, self.batch_size, self.num_slot_class+1))
         max_scores = tf.transpose(max_scores, [1, 0, 2])
         max_scores_pre = tf.transpose(max_scores_pre, [1, 0, 2])
 
@@ -217,7 +212,7 @@ class BILSTM_CRF(object):
                 transition_batch = helper.get_transition(y_train_batch)
 
                 if self.crf_flag == 2:
-                    _, loss_train, max_scores, max_scores_pre, predicts_train_intent, train_seq_length = \
+                    _, loss_train, max_scores, max_scores_pre, predicts_train_intent, len_train  = \
                     sess.run([
                         self.optimizer,
                         self.sum_loss,
@@ -233,11 +228,11 @@ class BILSTM_CRF(object):
                             self.targets_weight:y_train_weight_batch,
                             self.input_tag:X_train_tag_batch,
                             self.intent_target:y_intent_train_batch,
-                            self.sequence_len:seq_len_batch_train
+                         #   self.sequence_len:seq_len_batch_train
                         })
 
                     if iteration % 100 == 0:
-                        predicts_train = self.viterbi(max_scores, max_scores_pre, train_seq_length-1, predict_size=self.batch_size)
+                        predicts_train = self.viterbi(max_scores, max_scores_pre, len_train, predict_size=self.batch_size)
                         precision_train, recall_train, f1_train, acc_train = self.evaluate(X_train_batch, y_train_batch, y_intent_train_batch, predicts_train, predicts_train_intent, id2char, id2label)
                         print("iteration, train loss, train precision, train recall, train f1, train acc",iteration, loss_train, precision_train, recall_train, f1_train, acc_train)
                 elif self.crf_flag==3:
@@ -257,11 +252,11 @@ class BILSTM_CRF(object):
                                 # self.targets_weight: y_train_weight_batch,
                                 self.input_tag: X_train_tag_batch,
                                 self.intent_target: y_intent_train_batch,
-                                self.sequence_len: seq_len_batch_train
+                         #       self.sequence_len: seq_len_batch_train
                             })
                     if iteration % 100 == 0:
                         label_list = []
-                        for logit, seq_len in zip(slot_train_logits, seq_len_batch_train):
+                        for logit, seq_len in zip(slot_train_logits, train_seq_length):
                             viterbi_seq, _ = viterbi_decode(logit[:seq_len], transition_params_train)
                             label_list.append(viterbi_seq)
                         predicts_train = label_list
@@ -302,13 +297,17 @@ class BILSTM_CRF(object):
                                     model_dev.targets_weight:y_val_weight_batch,
                                     model_dev.input_tag:X_valid_input_tag_batch,
                                     model_dev.intent_target:y_intent_valid_batch,
-                                    model_dev.sequence_len:seq_len_valid_batch
+                                    # model_dev.sequence_len:seq_len_valid_batch
                                 })
-                            predicts_valid = model_dev.viterbi(max_scores, max_scores_pre, length_dev-1,
+                            predicts_valid = model_dev.viterbi(max_scores, max_scores_pre, length_dev,
                                                            predict_size=model_dev.batch_size)
                         elif self.crf_flag==3:
-                            slot_train_logits, transition_params_train, length_dev, intent_prediction, loss_valid = sess.run([model_dev.slot_logits, model_dev.transition_params,
-                                                                              model_dev.sequence_len, model_dev.intent_prediction,model_dev.sum_loss],
+                            slot_train_logits, transition_params_train, length_dev, intent_prediction, loss_valid = \
+                                sess.run([model_dev.slot_logits,
+                                          model_dev.transition_params,
+                                          model_dev.sequence_len,
+                                          model_dev.intent_prediction,
+                                          model_dev.sum_loss],
                                                                  feed_dict={
                                     # model_dev.targets_transition:transition_batch,
                                     model_dev.inputs:X_valid_batch,
@@ -316,10 +315,12 @@ class BILSTM_CRF(object):
                                     # model_dev.targets_weight:y_val_weight_batch,
                                     model_dev.input_tag:X_valid_input_tag_batch,
                                     model_dev.intent_target:y_intent_valid_batch,
-                                    model_dev.sequence_len:seq_len_valid_batch
+                                    # model_dev.sequence_len:seq_len_valid_batch
                                 })
                             label_list = []
-                            for logit, seq_len in zip(slot_train_logits, seq_len_valid_batch):
+                            for logit, seq_len in zip(slot_train_logits, length_dev):
+                                if seq_len == 0:  # padding 0 at last of the data
+                                    break
                                 viterbi_seq, _ = viterbi_decode(logit[:seq_len], transition_params_train)
                                 label_list.append(viterbi_seq)
                             predicts_valid = label_list
@@ -421,18 +422,23 @@ class BILSTM_CRF(object):
                     total_p += slot_precision_batch
                     total_r += slot_recall_batch
                     total_acc += acc
-            print("test intent acc: ", total_acc/num_iterations)
-            print("test slot precision: ", total_p/num_iterations)
-            print("test slot recall: ", total_r/num_iterations)
-            print("test slot f1: ", total_f1/num_iterations)
-            for j in range(len(y_predictions)):
-                doc = ''.join(X_test_str_batch[j])
-                if len(doc)>=1 and doc[0]!= 'x':
-                    out_intent_file.write(doc + "<@>" + intentid2label[y_predictions[j]]+"\n")
-            for i in range(len(results_BME)):
-                doc = ''.join(X_test_str_batch[i])
-                outfile.write(doc + "<@>" +" ".join(results_BME[i]) + "<@>" + " ".join(results_XYZ[i])  + "<@>" + " ".join(results_UVW[i]) + "\n")
-                #outfile.write(doc + "<@>" +" ".join(results[i]).encode("utf-8") + "\n")
+            # print("test intent acc: ", total_acc/num_iterations)
+            # print("test slot precision: ", total_p/num_iterations)
+            # print("test slot recall: ", total_r/num_iterations)
+            # print("test slot f1: ", total_f1/num_iterations)
+                for j in range(len(y_predictions)):
+                    doc = ''.join(X_test_str_batch[j])
+                    if len(doc)>=1 and doc[0]!= 'x':
+                        out_intent_file.write(doc + "<@>" + intentid2label[y_predictions[j]]+"\n")
+                for i in range(len(results_BME)):
+                    doc = ''.join(X_test_str_batch[i])
+                    outfile.write(doc + "<@>" +" ".join(results_BME[i]) + "<@>" + " ".join(results_XYZ[i])  + "<@>" + " ".join(results_UVW[i]) + "\n")
+                    #outfile.write(doc + "<@>" +" ".join(results[i]).encode("utf-8") + "\n")
+
+            print("test intent acc: ", total_acc / num_iterations)
+            print("test slot precision: ", total_p / num_iterations)
+            print("test slot recall: ", total_r / num_iterations)
+            print("test slot f1: ", total_f1 / num_iterations)
 
     def viterbi(self, max_scores, max_scores_pre, length, predict_size=128):
         best_paths = []
@@ -461,8 +467,36 @@ class BILSTM_CRF(object):
         hit_num = 0.0
         pred_num = 0.0
         true_num = 0.0
-        length, max_scores, max_scores_pre, predictions = sess.run([self.sequence_len, self.max_scores, self.max_scores_pre, self.intent_prediction], feed_dict={self.inputs:X, self.input_tag:X_tag, self.intent_target:y_intent})
-        predicts = self.viterbi(max_scores, max_scores_pre, length, self.batch_size)
+        if self.crf_flag==2:
+            length, max_scores, max_scores_pre, intent_prediction = sess.run(
+                [self.sequence_len, self.max_scores, self.max_scores_pre, self.intent_prediction],
+                            feed_dict={self.inputs:X, self.input_tag:X_tag, self.intent_target:y_intent})
+            predicts = self.viterbi(max_scores, max_scores_pre, length, self.batch_size)
+        elif self.crf_flag==3:
+            slot_train_logits, transition_params_train, length_dev, intent_prediction = \
+                sess.run([self.slot_logits,
+                          self.transition_params,
+                          self.sequence_len,
+                          self.intent_prediction,
+                          # self.sum_loss
+                          ],
+                         feed_dict={
+                             # model_dev.targets_transition:transition_batch,
+                             self.inputs: X,
+                             # self.slot_targets: y_valid_batch,
+                             # model_dev.targets_weight:y_val_weight_batch,
+                             self.input_tag: X_tag,
+                             self.intent_target: y_intent,
+                             # model_dev.sequence_len:seq_len_valid_batch
+                         })
+            label_list = []
+            for logit, seq_len in zip(slot_train_logits, length_dev):
+                if seq_len==0: # padding 0 at last of the data
+                    break
+                viterbi_seq, _ = viterbi_decode(logit[:seq_len], transition_params_train)
+                label_list.append(viterbi_seq)
+            predicts = label_list
+
         for i in range(len(predicts)):
             x = ''.join(X_str[i])
             x_ = [str(id2char[val]) for val in X[i]]
@@ -471,7 +505,7 @@ class BILSTM_CRF(object):
             y_hat = [id2label[val] for val in predicts[i]]
             true_labels = helper.extract_entity(x_, y)
             pred_labels = helper.extract_entity(x_, y_hat)
-            if False:#len(true_labels) == 0 and len(pred_labels) == 0: # 我们收集所有的实体了，全O的已经不要了。
+            if False:#len(true_labels) == 0 and len(pred_labels) == 0:
                 hit_num += 1
                 pred_num += 1
                 true_num += 1
@@ -490,10 +524,10 @@ class BILSTM_CRF(object):
             results_UVW.append(entitys_UVW)
             correct=0
             count=0
-            for j in range(len(predictions)):
+            for j in range(len(intent_prediction)):
                 # print("predictions",predictions[j])
                 # print("y_intent",y_intent[j])
-                if predictions[j]==y_intent[j] and y_intent[j]!=0:
+                if intent_prediction[j]==y_intent[j] and y_intent[j]!=0:
                     correct+=1
                 if y_intent[j]!=0:
                     count+=1
@@ -505,7 +539,7 @@ class BILSTM_CRF(object):
             slot_recall = 1.0 * hit_num / true_num
         if slot_precision > 0 and slot_recall > 0:
             slot_f1 = 2.0 * (slot_precision * slot_recall) / (slot_precision + slot_recall)
-        return results_BME, results_XYZ, results_UVW, predictions, correct, count ,slot_precision,slot_recall,slot_f1
+        return results_BME, results_XYZ, results_UVW, intent_prediction, correct, count ,slot_precision,slot_recall,slot_f1
 
     def evaluate(self, X, y_true, y_intent_true, y_pred, y_intent_pred, id2char, id2label):
         precision = -1.0
@@ -523,7 +557,7 @@ class BILSTM_CRF(object):
                 y_hat = [id2label[val] for val in y_pred[i]]
                 true_labels = helper.extract_entity(x, y)
                 pred_labels = helper.extract_entity(x, y_hat)
-                if False: #len(true_labels)==0 and len(pred_labels)==0: # 我们收集所有的实体了，全O的已经不要了。
+                if False:#len(true_labels)==0 and len(pred_labels)==0:
                     hit_num += 1
                     pred_num += 1
                     true_num += 1

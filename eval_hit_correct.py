@@ -104,7 +104,7 @@ def eval(pathin1, pathout2, BME_hit, XYZ_hit, UVW_hit):
 
 def eval_BME(pathin1, pathout2):
     dict_predict = {}
-    with open(pathin1, "rb") as fpin:
+    with open(pathin1, mode="r", encoding="utf-8") as fpin:
         for line in fpin:
             line = line.strip()
             words = line.split("<@>")
@@ -132,7 +132,7 @@ def eval_BME(pathin1, pathout2):
     sent = ""
     label_t = ""
 
-    with open(pathin2, "rb") as fpin:
+    with open(pathin2, mode="r", encoding="utf-8") as fpin:
         for line in fpin:
             if len(line.strip()) == 0:
                 true_labels = extractEntity_BME(sent, label_t)
@@ -177,7 +177,7 @@ def eval_BME(pathin1, pathout2):
 
 def eval_XYZ(pathin1, pathout2):
     dict_predict = {}
-    with open(pathin1, "rb") as fpin:
+    with open(pathin1, mode="r", encoding="utf-8") as fpin:
         for line in fpin:
             line = line.strip()
             words = line.split("<@>")
@@ -208,7 +208,7 @@ def eval_XYZ(pathin1, pathout2):
     sent = ""
     label_t = ""
 
-    with open(pathin2, "rb") as fpin:
+    with open(pathin2, mode="r", encoding="utf-8") as fpin:
         for line in fpin:
             if len(line.strip()) == 0:
                 true_labels = extractEntity_XYZ(sent, label_t)
@@ -249,7 +249,7 @@ def eval_XYZ(pathin1, pathout2):
 
 def eval_UVW(pathin1, pathout2):
     dict_predict = {}
-    with open(pathin1, "rb") as fpin:
+    with open(pathin1, mode="r", encoding="utf-8") as fpin:
         for line in fpin:
             line = line.strip()
             words = line.split("<@>")
@@ -280,7 +280,7 @@ def eval_UVW(pathin1, pathout2):
     sent = ""
     label_t = ""
 
-    with open(pathin2, "rb") as fpin:
+    with open(pathin2, mode="r", encoding="utf-8") as fpin:
         for line in fpin:
             if len(line.strip()) == 0:
                 true_labels = extractEntity_UVW(sent, label_t)
@@ -327,7 +327,7 @@ def extractEntity(sentence, labels):
     while m:
         entity_labels = m.group()
         start_index = labels.find(entity_labels)
-        entity = unicode(sentence, "utf8")[start_index: start_index+len(entity_labels)].encode("utf8")
+        entity = sentence[start_index: start_index+len(entity_labels)].encode("utf8")
         labels = list(labels)
         labels[start_index: start_index + len(entity_labels)] = ['O' for i in range(len(entity_labels))]
         entitys.append(entity.strip())
@@ -339,7 +339,7 @@ def extractEntity(sentence, labels):
     while m:
         entity_labels = m.group()
         start_index = labels.find(entity_labels)
-        entity = unicode(sentence, "utf8")[start_index: start_index+len(entity_labels)].encode("utf8")
+        entity = sentence[start_index: start_index+len(entity_labels)].encode("utf8")
         labels = list(labels)
         labels[start_index: start_index + len(entity_labels)] = ['O' for i in range(len(entity_labels))]
         entitys.append(entity.strip())
@@ -351,7 +351,7 @@ def extractEntity(sentence, labels):
     while m:
         entity_labels = m.group()
         start_index = labels.find(entity_labels)
-        entity = unicode(sentence, "utf8")[start_index: start_index+len(entity_labels)].encode("utf8")
+        entity = sentence[start_index: start_index+len(entity_labels)].encode("utf8")
         labels = list(labels)
         labels[start_index: start_index + len(entity_labels)] = ['O' for i in range(len(entity_labels))]
         entitys.append(entity.strip())
@@ -367,7 +367,7 @@ def extractEntity_BME(sentence, labels):
     while m:
         entity_labels = m.group()
         start_index = labels.find(entity_labels)
-        entity = unicode(sentence, "utf8")[start_index: start_index+len(entity_labels)].encode("utf8")
+        entity = sentence[start_index: start_index+len(entity_labels)].encode("utf8")
         labels = list(labels)
         labels[start_index: start_index + len(entity_labels)] = ['O' for i in range(len(entity_labels))]
         entitys.append(entity.strip())
@@ -383,7 +383,7 @@ def extractEntity_XYZ(sentence, labels):
     while m:
         entity_labels = m.group()
         start_index = labels.find(entity_labels)
-        entity = unicode(sentence, "utf8")[start_index: start_index+len(entity_labels)].encode("utf8")
+        entity = sentence[start_index: start_index+len(entity_labels)].encode("utf8")
         labels = list(labels)
         labels[start_index: start_index + len(entity_labels)] = ['O' for i in range(len(entity_labels))]
         entitys.append(entity.strip())
@@ -398,7 +398,7 @@ def extractEntity_UVW(sentence, labels):
     while m:
         entity_labels = m.group()
         start_index = labels.find(entity_labels)
-        entity = unicode(sentence, "utf8")[start_index: start_index+len(entity_labels)].encode("utf8")
+        entity = sentence[start_index: start_index+len(entity_labels)].encode("utf8")
         labels = list(labels)
         labels[start_index: start_index + len(entity_labels)] = ['O' for i in range(len(entity_labels))]
         entitys.append(entity.strip())
@@ -408,8 +408,8 @@ def extractEntity_UVW(sentence, labels):
 
 
 if __name__ == "__main__":
-    pathin1 = "./test_merge_BME_out"
-    pathin2 = "./test_merge_BME"
+    pathin1 = "test_output/output"
+    pathin2 = "processed3/test_BME"
     BME_hit = eval_BME(pathin1, pathin2)
     XYZ_hit = eval_XYZ(pathin1, pathin2)
     UVW_hit = eval_UVW(pathin1, pathin2)

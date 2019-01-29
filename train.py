@@ -21,7 +21,7 @@ parser.add_argument("--save_path", default="predict_output", help="the path of t
 parser.add_argument("--val_path", help="the path of the validation file", default="processed3/test_BME")
 parser.add_argument("--val_tag_path", help="the path of the valid tag file", default="processed3/test_char_label")
 parser.add_argument("--val_intent_path", help="the path of the valid intent file", default="processed3/intent_test")
-parser.add_argument("--epoch", help="the number of epoch", default=20, type=int)
+parser.add_argument("--epoch", help="the number of epoch", default=10, type=int)
 parser.add_argument("--char_emb", help="the char embedding file", default="vectors.txt")
 # parser.add_argument("--gpu", help="the id of gpu, the default is 0", default=0, type=int)
 
