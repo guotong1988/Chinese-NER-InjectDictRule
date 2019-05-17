@@ -2,4 +2,4 @@
 PYTHON3
 
 ### feature
-entity name encoded for input
+entity names are encoded for model input
