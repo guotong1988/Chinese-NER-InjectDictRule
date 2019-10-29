@@ -15,7 +15,7 @@ def getEmbedding(infile_path="embedding"):
     char2id, id_char = loadMap("meta_data/char2id")
     row_index = 0
     set_id = set()
-    with open(infile_path, "rb") as infile:
+    with open(infile_path, mode="r",encoding="utf-8") as infile:
         for row in infile:
             row = row.strip()
             row_index += 1
@@ -24,7 +24,7 @@ def getEmbedding(infile_path="embedding"):
                 emb_dim = int(row.split()[1])
                 emb_matrix = np.zeros((len(char2id.keys()), emb_dim))
                 continue
-            row = row.decode("utf-8")
+            # row = row.decode("utf-8")
             items = row.split()
             char = items[0]
             emb_vec = [float(val) for val in items[1:]]
@@ -95,10 +95,14 @@ def padding(sample, seq_max_len):
             sample[i] += [0 for _ in range(seq_max_len - len(sample[i]))]
     return sample
 
+def padding_with_start_end(sample, seq_max_len, char2id): # for elmo
+    for i in range(len(sample)):
+        if len(sample[i]) < seq_max_len:
+            sample[i] += [0 for _ in range(seq_max_len - len(sample[i]))]
+        sample[i] = [char2id["<S>"]] + sample[i] + [char2id["</S>"]]
+    return sample
 
-
-
-def prepare(chars, labels, seq_max_len, is_padding=True):
+def prepare(chars, labels, seq_max_len, is_padding=True, char2id=None):
     X = []
     y = []
     tmp_x = []
@@ -109,16 +113,18 @@ def prepare(chars, labels, seq_max_len, is_padding=True):
         l = record[1]
         # empty line
         if c == -1:
-            if len(tmp_x) <= seq_max_len:
-                X.append(tmp_x)
-                y.append(tmp_y)
-                seq_len.append(len(tmp_x))
+            if len(tmp_x) <= seq_max_len\
+                and len(tmp_x) != 0:
+                  X.append(tmp_x)
+                  y.append(tmp_y)
+                  seq_len.append(len(tmp_x))
             tmp_x = []
             tmp_y = []
         else:
             tmp_x.append(c)
             tmp_y.append(l)
     if is_padding:
+        # X = np.array(padding_with_start_end(X, seq_max_len, char2id))
         X = np.array(padding(X, seq_max_len))
     else:
         X = np.array(X)
@@ -276,28 +282,41 @@ def loadMap(token2id_filepath):
     return token2id, id2token
 
 def saveMap(id2char, id2label):
-    with open("meta_data/char2id", "w", encoding="utf-8") as outfile:
-        for idx in id2char:
-            outfile.write(id2char[idx] + "\t" + str(idx)  + "\n")
-    with open("meta_data/label2id", "w", encoding="utf-8") as outfile:
-        for idx in id2label:
-            outfile.write(id2label[idx] + "\t" + str(idx) + "\n")
+    outfile = open("meta_data/char2id", "w", encoding="utf-8")
+    for idx in id2char:
+        outfile.write(id2char[idx] + "\t" + str(idx)  + "\n")
+
+
+    outfile2 = open("meta_data/label2id", "w", encoding="utf-8")
+    for idx in id2label:
+        outfile2.write(id2label[idx] + "\t" + str(idx) + "\n")
+
+    outfile.close()
+    outfile2.close()
     print("saved map between token and id")
 
 def build_map(train_path="train.in"):
     df_train = pd.read_csv(train_path, delimiter='\t', quoting=csv.QUOTE_NONE, skip_blank_lines=False, header=None, names=["char", "label"])
-    chars = list(set(df_train["char"][df_train["char"].notnull()]))
+    chars = []#list(set(df_train["char"][df_train["char"].notnull()]))
     labels = list(set(df_train["label"][df_train["label"].notnull()]))
-    char2id = dict(zip(chars, range(1, len(chars) + 1)))
-    label2id = dict(zip(labels, range(1, len(labels) + 1)))
-    id2char = dict(zip(range(1, len(chars) + 1), chars))
-    id2label =  dict(zip(range(1, len(labels) + 1), labels))
-    id2char[0] = "<PAD>"
-    id2label[0] = "<PAD>"
-    char2id["<PAD>"] = 0
-    label2id["<PAD>"] = 0
-    id2char[len(chars) + 1] = "<NEW>"
-    char2id["<NEW>"] = len(chars) + 1
+    char2id = {}#dict(zip(chars, range(1, len(chars) + 1)))
+    f = open("elmo/vocab.txt",encoding="utf-8",mode="r")
+    lines = f.readlines()
+    for i,line in enumerate(lines):
+        char2id[line.strip()]=i
+        chars.append(line.strip())
+
+    id2char = dict(zip(range(0, len(chars)), chars))
+
+    label2id = dict(zip(labels, range(1, len(labels)+1)))
+
+    id2label =  dict(zip(range(1, len(labels)+1), labels))
+    # id2char[0] = "[PAD]"
+    id2label[0] = "[PAD]"
+    # char2id["[PAD]"] = 0
+    label2id["[PAD]"] = 0
+    # id2char[len(chars) + 1] = "<NEW>"
+    # char2id["<NEW>"] = len(chars) + 1
 
     saveMap(id2char, id2label)
 
@@ -311,10 +330,10 @@ def buildIntentMap(train_path="train.in"):
     label2id = dict(zip(labels, range(1, len(labels) + 1)))
     id2char = dict(zip(range(1, len(chars) + 1), chars))
     id2label =  dict(zip(range(1, len(labels) + 1), labels))
-    id2char[0] = "<PAD>"
-    id2label[0] = "<PAD>"
-    char2id["<PAD>"] = 0
-    label2id["<PAD>"] = 0
+    id2char[0] = "[PAD]"
+    id2label[0] = "[PAD]"
+    char2id["[PAD]"] = 0
+    label2id["[PAD]"] = 0
     id2char[len(chars) + 1] = "<NEW>"
     char2id["<NEW>"] = len(chars) + 1
     with open("meta_data/intentchar2id", "w") as outfile:
@@ -459,10 +478,26 @@ def get_train(train_path, val_path, input_tag_path, val_tag_path, input_intent_p
     df_train = pd.read_csv(train_path, delimiter='\t', quoting=csv.QUOTE_NONE, skip_blank_lines=False, header=None, names=["char", "label"])
 
     # map the char and label into id
-    df_train["char_id"] = df_train.char.map(lambda x : -1 if str(x) == str(np.nan) else char2id[x])
-    df_train["label_id"] = df_train.label.map(lambda x : -1 if str(x) == str(np.nan) else label2id[x])
+    def f1(x):
+        if str(x) == str(np.nan):
+            return -1
+        elif x in char2id:
+            return char2id[x]
+        else:
+            return char2id['<UNK>']
+    df_train["char_id"] = df_train.char.map(f1)
+    def f2(x):
+        if str(x) == str(np.nan):
+            return -1
+        elif x in label2id:
+            return label2id[x]
+        else:
+            return char2id['<UNK>']
+    df_train["label_id"] = df_train.label.map(f2)
     # convert the data in maxtrix
-    X, y, seq_len_train = prepare(df_train["char_id"].values.tolist(), df_train["label_id"].values.tolist(), seq_max_len)
+    X, y, seq_len_train = prepare(df_train["char_id"].values.tolist(),
+                                  df_train["label_id"].values.tolist(),
+                                  seq_max_len, char2id=char2id)
     X_tag = get_input_tag_x(input_tag_path, seq_max_len)
     y_intent = get_input_intent_y(input_intent_path)
     print(X.shape)
@@ -508,14 +543,14 @@ def get_test(test_path="test.in", test_tag_path="./song_test_char", test_intent_
         if str(x) == str(np.nan):
             return -1
         elif x not in char2id:
-            return char2id["<NEW>"]
+            return char2id["<UNK>"]
         else:
             return char2id[x]
     def labelMapFunc(x, label2id):
         if str(x) == str(np.nan):
             return -1
         elif x not in label2id:
-            return label2id["<NEW>"]
+            return label2id["[PAD]"]
         else:
             return label2id[x]
 
@@ -524,14 +559,20 @@ def get_test(test_path="test.in", test_tag_path="./song_test_char", test_intent_
     df_test["label_id"] = df_test.label.map(lambda x : labelMapFunc(x, label2id))
 
     if is_validation:
-        X_test, y_test, seq_len_test = prepare(df_test["char_id"].values.tolist(), df_test["label_id"].values.tolist(), seq_max_len)
+        X_test, y_test, seq_len_test = prepare(df_test["char_id"].values.tolist(),
+                                               df_test["label_id"].values.tolist(),
+                                               seq_max_len, char2id=char2id)
         X_test_tag = get_input_tag(test_tag_path, seq_max_len)
         y_intent_test = get_input_intent(test_intent_path)
         return X_test, y_test, X_test_tag, y_intent_test, seq_len_test
     else:
         df_test["char"] = df_test.char.map(lambda x : -1 if str(x) == str(np.nan) else x)
-        X_test, y_test, seq_len_test = prepare(df_test["char_id"].values.tolist(), df_test["label_id"].values.tolist(), seq_max_len)
-        X_test_str, y_test_str, _ = prepare(df_test["char"].values.tolist(), df_test["label"].values.tolist(), seq_max_len, is_padding=False)
+        X_test, y_test, seq_len_test = prepare(df_test["char_id"].values.tolist(),
+                                               df_test["label_id"].values.tolist(),
+                                               seq_max_len, char2id=char2id)
+        X_test_str, y_test_str, _ = prepare(df_test["char"].values.tolist(),
+                                            df_test["label"].values.tolist(),
+                                            seq_max_len, is_padding=False,char2id=char2id)
         X_test_tag = get_input_tag(test_tag_path, seq_max_len)
         y_intent_test = get_input_intent(test_intent_path)
         print("test size: %d" %(len(X_test)))

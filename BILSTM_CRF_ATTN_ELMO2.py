@@ -7,15 +7,18 @@ np.set_printoptions(threshold=np.nan)
 from tensorflow.contrib.crf import crf_log_likelihood
 from tensorflow.contrib.crf import viterbi_decode
 
+from elmo import TokenBatcher, BidirectionalLanguageModel, weight_layers, \
+    dump_token_embeddings2
+
 def _initializer(shape, dtype=tf.float32, partition_info=None):
     return tf.orthogonal_initializer(dtype=tf.float32)(shape = shape)
 
+from tensorflow.contrib.legacy_seq2seq.python.ops import seq2seq as seq2seq_lib
 
 class BILSTM_CRF(object):
 
     def __init__(self, num_chars, num_slot_class, num_intent_classes, num_steps=30,
-                 num_epochs=100, embedding_matrix=None, is_training=True, crf_flag=3, weight=False,
-                 inputs=None, input_tag=None):
+                 num_epochs=100, embedding_matrix=None, is_training=True, crf_flag=3, weight=False):
         # Parameter
         self.max_f1 = 0
         self.max_acc = 0
@@ -34,17 +37,23 @@ class BILSTM_CRF(object):
         self.crf_flag = crf_flag
 
         # placeholder of x, y and weight
-        if is_training==False:
-            self.inputs = tf.reshape(inputs, shape=[-1, self.num_steps])
-        else:
-            self.inputs = tf.placeholder(tf.int32, [None, self.num_steps])
-
-        # self.inputs = tf.placeholder(tf.int32, [None, self.num_steps])
+        self.inputs = tf.placeholder(tf.int32, [None, self.num_steps+2])
         self.slot_targets = tf.placeholder(tf.int32, [None, self.num_steps])
         self.targets_weight = tf.placeholder(tf.float32, [None, self.num_steps])
         self.targets_transition = tf.placeholder(tf.int32, [None])
         #self.sequence_len = tf.placeholder(tf.int32, [None])
         self.intent_target = tf.placeholder(tf.int32, [None])
+
+        bilm = BidirectionalLanguageModel(
+            options_file="elmo/options.json",
+            weight_file="elmo/dump_weights.hdf5",
+            use_character_inputs=False,
+            embedding_weight_file="elmo/elmo_token_embeddings.hdf5"
+        )
+
+        input_embeddings_op = bilm(self.inputs)
+
+        elmo_output = weight_layers('input', input_embeddings_op, l2_coef=0.0)
 
         # char embedding
         if embedding_matrix is None:
@@ -54,14 +63,10 @@ class BILSTM_CRF(object):
             print("embedding_matrix is not None")
             self.embedding = tf.Variable(embedding_matrix, trainable=True, name="emb", dtype=tf.float32)
 
-        if is_training==False:
-            self.input_tag = tf.reshape(input_tag, shape=[-1, self.num_steps, self.input_tag_size])
-        else:
-            self.input_tag = tf.placeholder(tf.float32, [None, self.num_steps, self.input_tag_size])
-
-        # self.input_tag = tf.placeholder(tf.float32, [None, self.num_steps, self.input_tag_size])
-        self.input_emb = tf.nn.embedding_lookup(self.embedding, self.inputs)
-        self.input_emb = tf.concat(axis=2, values=[self.input_emb, self.input_tag])
+        self.input_tag = tf.placeholder(tf.float32, [None, self.num_steps, self.input_tag_size])
+        self.input_emb = elmo_output["weighted_op"]
+        word_emb = tf.nn.embedding_lookup(self.embedding, self.inputs[:,1:-1])
+        self.input_emb = tf.concat(axis=2, values=[self.input_emb, word_emb, self.input_tag])
 
         # self.inputs_emb = tf.transpose(self.inputs_emb, [1, 0, 2])
         # self.inputs_emb = tf.reshape(self.inputs_emb, [-1, self.emb_dim+self.tag_size])
@@ -80,11 +85,11 @@ class BILSTM_CRF(object):
         lstm_cell_bw = tf.nn.rnn_cell.MultiRNNCell([lstm_cell_bw] * self.num_layers)
 
         # get the length of each sample
-        self.sequence_len = tf.reduce_sum(tf.sign(self.inputs), reduction_indices=1)
+        self.sequence_len = tf.reduce_sum(tf.sign(self.inputs[:,1:-1]), reduction_indices=1)
         self.sequence_len = tf.cast(self.sequence_len, tf.int32)
 
         # forward and backward
-        self.outputs, _ = rnn.bidirectional_dynamic_rnn(
+        self.encoder_outputs, self.encoder_output_states = rnn.bidirectional_dynamic_rnn(
             lstm_cell_fw,
             lstm_cell_bw,
             self.input_emb,
@@ -92,7 +97,26 @@ class BILSTM_CRF(object):
             sequence_length=self.sequence_len
         )
 
-        rnn_output1 = self.outputs[1][:,0,:]
+        state_fw = self.encoder_output_states[0][-1]
+        state_bw = self.encoder_output_states[1][0]
+        encoder_state = tf.concat([tf.concat(state_fw, 1),
+                                   tf.concat(state_bw, 1)], 1)
+
+        decoder_cell = tf.nn.rnn_cell.LSTMCell(self.hidden_dim, initializer=_initializer)
+
+        # dropout
+        if is_training:
+            decoder_cell = tf.nn.rnn_cell.DropoutWrapper(decoder_cell, output_keep_prob=(1 - self.dropout_rate))
+
+        decoder_output_list, _ = seq2seq_lib.attention_decoder(
+            decoder_inputs=tf.unstack(self.encoder_outputs[0],axis=1),#[tf.zeros(shape=tf.shape(state_fw[0]))] * self.num_steps,
+            initial_state=state_fw,
+            attention_states=self.encoder_outputs[0],
+            cell=decoder_cell)
+
+        decoder_outputs = tf.stack(decoder_output_list,axis=1)
+
+        rnn_output1 = self.encoder_outputs[1][:, 0, :]
         #rnn_output0 = helper.collect_final_step_of_lstm(self.outputs[0],self.sequence_len-1)
         self.intent_input = rnn_output1 # tf.concat(axis=1, values=[rnn_output0,rnn_output1])
         #self.intent_input=tf.reduce_max(self.outputs[0],1)
@@ -102,10 +126,11 @@ class BILSTM_CRF(object):
         self.intent_loss = tf.reduce_mean(tf.nn.sparse_softmax_cross_entropy_with_logits(logits=self.intent_logits, labels=self.intent_target))
         self.intent_prediction = tf.argmax(self.intent_logits, 1, name="predictions")
 
-        self.outputs = tf.concat(axis=-1, values=self.outputs)
-        # self.outputs = tf.reshape(tf.concat(axis=1, values=self.outputs), [-1, self.hidden_dim * 2])
+        # self.encoder_outputs = tf.concat(axis=-1, values=self.encoder_outputs)
+
         dense_layer2 = tf.layers.Dense(units=self.num_slot_class, name="tag")
-        self.slot_logits = dense_layer2(self.outputs)
+        self.outputs = tf.concat(axis=-1, values=[self.encoder_outputs[0], decoder_outputs])
+        self.slot_logits = dense_layer2(decoder_outputs)
 
         if crf_flag==1:
             self.slot_loss = tf.reduce_mean(tf.nn.softmax_cross_entropy_with_logits(self.slot_logits, self.slot_targets))
@@ -150,9 +175,26 @@ class BILSTM_CRF(object):
         elif crf_flag==3:
             slot_loss, self.transition_params = crf_log_likelihood(inputs=self.slot_logits, tag_indices=self.slot_targets, sequence_lengths=self.sequence_len)
             self.slot_loss = -tf.reduce_mean(slot_loss)
-        self.sum_loss= self.slot_loss + 200 * self.intent_loss
+        self.sum_loss= self.slot_loss + 200 * self.intent_loss # + elmo_output["regularization_op"][0]
 
-        self.optimizer = tf.train.AdamOptimizer(learning_rate=self.learning_rate).minimize(self.sum_loss)
+        if True: # fix the ELMo
+            def var_filter(var_list):
+                for var in var_list:
+                    if "bilm" not in var.name:
+                        yield var
+
+            def compute_gradients(tensor, var_list):
+                    grads = tf.gradients(tensor, var_list)
+                    return [grad if grad is not None else tf.zeros_like(var) for var, grad in zip(var_list, grads)]
+
+            optimizer = tf.train.AdamOptimizer(learning_rate=self.learning_rate)
+            tvars = list(var_filter(tf.trainable_variables()))
+
+            grads = compute_gradients(self.sum_loss, tvars)
+            # grads, _ = tf.clip_by_global_norm(grads, self.options.grad_clipper)
+            self.optimizer = optimizer.apply_gradients(zip(grads, tvars))
+        else:
+            self.optimizer = tf.train.AdamOptimizer(learning_rate=self.learning_rate).minimize(self.sum_loss)
 
     def logsumexp(self, x, axis=None):
         x_max = tf.reduce_max(x, reduction_indices=axis, keepdims=True)
@@ -397,8 +439,8 @@ class BILSTM_CRF(object):
 
                     last_size = len(X_test_batch)
 
-                    X_test_batch += [[0 for j in range(self.num_steps)] for i in range(self.batch_size - last_size)]
-                    X_test_str_batch += [['x' for j in range(self.num_steps)] for i in range(self.batch_size - last_size)]
+                    X_test_batch += [[0 for j in range(self.num_steps+2)] for i in range(self.batch_size - last_size)]
+                    X_test_str_batch += [['x' for j in range(self.num_steps+2)] for i in range(self.batch_size - last_size)]
                     X_test_tag_batch += [[[0, 0, 0, 0, 0, 0, 0, 0, 0] for j in range(self.num_steps)] for i in range(self.batch_size - last_size)]
                     y_intent_test_batch += [0 for i in range(self.batch_size - last_size)]
                     y_test_batch += [[0 for j in range(self.num_steps)] for i in range(self.batch_size - last_size)]
@@ -451,7 +493,6 @@ class BILSTM_CRF(object):
             print("test intent acc: ", total_acc / num_iterations)
             print("test slot precision: ", total_p / num_iterations)
             print("test slot recall: ", total_r / num_iterations)
-            total_f1 = 2.0*total_p*total_r/(total_r+total_p)
             print("test slot f1: ", total_f1 / num_iterations)
 
     def viterbi(self, max_scores, max_scores_pre, length, predict_size=128):

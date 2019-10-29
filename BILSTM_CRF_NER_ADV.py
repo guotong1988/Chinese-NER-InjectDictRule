@@ -3,7 +3,6 @@ import helper
 import numpy as np
 import tensorflow as tf
 from tensorflow.python.ops import rnn
-np.set_printoptions(threshold=np.nan)
 from tensorflow.contrib.crf import crf_log_likelihood
 from tensorflow.contrib.crf import viterbi_decode
 
@@ -41,6 +40,7 @@ class BILSTM_CRF(object):
 
         # self.inputs = tf.placeholder(tf.int32, [None, self.num_steps])
         self.slot_targets = tf.placeholder(tf.int32, [None, self.num_steps])
+        slot_targets = self.slot_targets
         self.targets_weight = tf.placeholder(tf.float32, [None, self.num_steps])
         self.targets_transition = tf.placeholder(tf.int32, [None])
         #self.sequence_len = tf.placeholder(tf.int32, [None])
@@ -61,51 +61,25 @@ class BILSTM_CRF(object):
 
         # self.input_tag = tf.placeholder(tf.float32, [None, self.num_steps, self.input_tag_size])
         self.input_emb = tf.nn.embedding_lookup(self.embedding, self.inputs)
-        self.input_emb = tf.concat(axis=2, values=[self.input_emb, self.input_tag])
+        self.input_emb_final = tf.concat(axis=2, values=[self.input_emb, self.input_tag])
 
         # self.inputs_emb = tf.transpose(self.inputs_emb, [1, 0, 2])
         # self.inputs_emb = tf.reshape(self.inputs_emb, [-1, self.emb_dim+self.tag_size])
         # self.inputs_emb = tf.split(axis=0, num_or_size_splits=self.num_steps, value=self.inputs_emb)
 
         # lstm cell
-        lstm_cell_fw = tf.nn.rnn_cell.LSTMCell(self.hidden_dim,initializer=_initializer)
-        lstm_cell_bw = tf.nn.rnn_cell.LSTMCell(self.hidden_dim,initializer=_initializer)
+        lstm_cell = tf.nn.rnn_cell.LSTMCell(self.hidden_dim,initializer=_initializer)
 
         # dropout
         if is_training:
-            lstm_cell_fw = tf.nn.rnn_cell.DropoutWrapper(lstm_cell_fw, output_keep_prob=(1 - self.dropout_rate))
-            lstm_cell_bw = tf.nn.rnn_cell.DropoutWrapper(lstm_cell_bw, output_keep_prob=(1 - self.dropout_rate))
+            lstm_cell = tf.nn.rnn_cell.DropoutWrapper(lstm_cell, output_keep_prob=(1 - self.dropout_rate))
 
-        lstm_cell_fw = tf.nn.rnn_cell.MultiRNNCell([lstm_cell_fw] * self.num_layers)
-        lstm_cell_bw = tf.nn.rnn_cell.MultiRNNCell([lstm_cell_bw] * self.num_layers)
+        lstm_cell = tf.nn.rnn_cell.MultiRNNCell([lstm_cell] * self.num_layers)
 
         # get the length of each sample
         self.sequence_len = tf.reduce_sum(tf.sign(self.inputs), reduction_indices=1)
         self.sequence_len = tf.cast(self.sequence_len, tf.int32)
-
-        # forward and backward
-        self.outputs, _ = rnn.bidirectional_dynamic_rnn(
-            lstm_cell_fw,
-            lstm_cell_bw,
-            self.input_emb,
-            dtype=tf.float32,
-            sequence_length=self.sequence_len
-        )
-
-        rnn_output1 = self.outputs[1][:,0,:]
-        #rnn_output0 = helper.collect_final_step_of_lstm(self.outputs[0],self.sequence_len-1)
-        self.intent_input = rnn_output1 # tf.concat(axis=1, values=[rnn_output0,rnn_output1])
-        #self.intent_input=tf.reduce_max(self.outputs[0],1)
-        dense_layer = tf.layers.Dense(units=self.num_intent_class, name="intent")
-        self.intent_logits = dense_layer(self.intent_input)
-
-        self.intent_loss = tf.reduce_mean(tf.nn.sparse_softmax_cross_entropy_with_logits(logits=self.intent_logits, labels=self.intent_target))
-        self.intent_prediction = tf.argmax(self.intent_logits, 1, name="predictions")
-
-        self.outputs = tf.concat(axis=-1, values=self.outputs)
-        # self.outputs = tf.reshape(tf.concat(axis=1, values=self.outputs), [-1, self.hidden_dim * 2])
-        dense_layer2 = tf.layers.Dense(units=self.num_slot_class, name="tag")
-        self.slot_logits = dense_layer2(self.outputs)
+        seq_len=self.sequence_len
 
         if crf_flag==1:
             self.slot_loss = tf.reduce_mean(tf.nn.softmax_cross_entropy_with_logits(self.slot_logits, self.slot_targets))
@@ -148,9 +122,53 @@ class BILSTM_CRF(object):
             # loss
             self.slot_loss = - (self.target_path_score - self.total_path_score)
         elif crf_flag==3:
-            slot_loss, self.transition_params = crf_log_likelihood(inputs=self.slot_logits, tag_indices=self.slot_targets, sequence_lengths=self.sequence_len)
-            self.slot_loss = -tf.reduce_mean(slot_loss)
-        self.sum_loss= self.slot_loss + 200 * self.intent_loss
+            def encoder_decoder(input_emb):
+                # forward and backward
+                with tf.variable_scope("tmp", reuse=tf.AUTO_REUSE):
+                    outputs, _ = rnn.dynamic_rnn(
+                        lstm_cell,
+                        input_emb,
+                        dtype=tf.float32,
+                        sequence_length=seq_len
+                    )
+
+                    dense_layer = tf.layers.Dense(units=self.num_slot_class, name="tag")
+                    slot_logits = dense_layer(outputs)  # TODO 是不是不用这层？
+
+                    slot_loss, transition_params = crf_log_likelihood(inputs=slot_logits,
+                                                                           tag_indices=slot_targets,
+                                                                           sequence_lengths=seq_len)
+                    slot_loss = -tf.reduce_mean(slot_loss)
+                    return slot_loss, transition_params, slot_logits
+
+        def _scale_l2(x, perturb_norm_length):
+            # shape(x) = (batch, num_timesteps, d)
+            # Divide x by max(abs(x)) for a numerically stable L2 norm.
+            # 2norm(x) = a * 2norm(x/a)
+            # Scale over the full sequence, dims (1, 2)
+            alpha = tf.reduce_max(tf.abs(x), (1, 2), keep_dims=True) + 1e-12
+            l2_norm = alpha * tf.sqrt(
+                tf.reduce_sum(tf.pow(x / alpha, 2), (1, 2), keep_dims=True) + 1e-6)
+            x_unit = x / l2_norm
+            return perturb_norm_length * x_unit
+
+        def adversarial_loss(embedded, loss, loss_fn):
+            """Adds gradient to embedding and recomputes classification loss."""
+            grad, = tf.gradients(
+                loss,
+                embedded,
+                aggregation_method=tf.AggregationMethod.EXPERIMENTAL_ACCUMULATE_N)
+            grad = tf.stop_gradient(grad)
+            perturb = _scale_l2(grad, perturb_norm_length=5)
+            return loss_fn(embedded + perturb)
+
+        self.sum_loss, self.transition_params, self.slot_logits = encoder_decoder(self.input_emb)
+
+        self.sum_loss += adversarial_loss(self.input_emb, self.sum_loss, encoder_decoder)[0]
+
+        viterbi_sequence, viterbi_score = tf.contrib.crf.crf_decode(
+            self.slot_logits, self.transition_params, self.sequence_len)
+        self.predicts = viterbi_sequence
 
         self.optimizer = tf.train.AdamOptimizer(learning_rate=self.learning_rate).minimize(self.sum_loss)
 
@@ -247,13 +265,13 @@ class BILSTM_CRF(object):
                         precision_train, recall_train, f1_train, acc_train = self.evaluate(X_train_batch, y_train_batch, y_intent_train_batch, predicts_train, predicts_train_intent, id2char, id2label)
                         print("iteration, train loss, train precision, train recall, train f1, train acc",iteration, loss_train, precision_train, recall_train, f1_train, acc_train)
                 elif self.crf_flag==3:
-                    _, transition_params_train, slot_train_logits, loss_train, predicts_train_intent, train_seq_length = \
+                    _, transition_params_train, slot_train_logits, loss_train, train_seq_length = \
                         sess.run([
                             self.optimizer,
                             self.transition_params,
                             self.slot_logits,
                             self.sum_loss,
-                            self.intent_prediction,
+                            # self.intent_prediction,
                             self.sequence_len,
                         ],
                             feed_dict={
@@ -262,7 +280,7 @@ class BILSTM_CRF(object):
                                 self.slot_targets: y_train_batch,
                                 # self.targets_weight: y_train_weight_batch,
                                 self.input_tag: X_train_tag_batch,
-                                self.intent_target: y_intent_train_batch,
+                                # self.intent_target: y_intent_train_batch,
                          #       self.sequence_len: seq_len_batch_train
                             })
                     if iteration % 100 == 0:
@@ -275,8 +293,8 @@ class BILSTM_CRF(object):
                         predicts_train = label_list
                         precision_train, recall_train, f1_train, acc_train = self.evaluate(X_train_batch, y_train_batch,
                                                                                    y_intent_train_batch, predicts_train,
-                                                                                   predicts_train_intent, id2char,
-                                                                                   id2label)
+                                                                                   id2char=id2char,
+                                                                                   id2label=id2label)
                         print("iteration, train loss, train precision, train recall, train f1, train acc", iteration,
                         loss_train, precision_train, recall_train, f1_train, acc_train)
 
@@ -315,11 +333,11 @@ class BILSTM_CRF(object):
                             predicts_valid = model_dev.viterbi(max_scores, max_scores_pre, length_dev,
                                                            predict_size=model_dev.batch_size)
                         elif self.crf_flag==3:
-                            slot_train_logits, transition_params_train, length_dev, intent_prediction, loss_valid = \
+                            slot_train_logits, transition_params_train, length_dev, loss_valid = \
                                 sess.run([model_dev.slot_logits,
                                           model_dev.transition_params,
                                           model_dev.sequence_len,
-                                          model_dev.intent_prediction,
+                                          # model_dev.intent_prediction,
                                           model_dev.sum_loss],
                                                                  feed_dict={
                                     # model_dev.targets_transition:transition_batch,
@@ -327,7 +345,7 @@ class BILSTM_CRF(object):
                                     model_dev.slot_targets:y_valid_batch,
                                     # model_dev.targets_weight:y_val_weight_batch,
                                     model_dev.input_tag:X_valid_input_tag_batch,
-                                    model_dev.intent_target:y_intent_valid_batch,
+                                    # model_dev.intent_target:y_intent_valid_batch,
                                     # model_dev.sequence_len:seq_len_valid_batch
                                 })
                             label_list = []
@@ -337,10 +355,10 @@ class BILSTM_CRF(object):
                                 viterbi_seq, _ = viterbi_decode(logit[:seq_len], transition_params_train)
                                 label_list.append(viterbi_seq)
                             predicts_valid = label_list
-                            predicts_valid_intent = intent_prediction
+                            # predicts_valid_intent = intent_prediction
 
                         precision_valid, recall_valid, f1_valid, acc_valid = \
-                            model_dev.evaluate(X_valid_batch, y_valid_batch, y_intent_valid_batch, predicts_valid, predicts_valid_intent, id2char, id2label)
+                            model_dev.evaluate(X_valid_batch, y_valid_batch, y_intent_valid_batch, predicts_valid, id2char=id2char, id2label=id2label)
 
                         f1_valid_sum += f1_valid
                         acc_valid_sum += acc_valid
@@ -451,7 +469,7 @@ class BILSTM_CRF(object):
             print("test intent acc: ", total_acc / num_iterations)
             print("test slot precision: ", total_p / num_iterations)
             print("test slot recall: ", total_r / num_iterations)
-            total_f1 = 2.0*total_p*total_r/(total_r+total_p)
+            total_f1 = 2.0 * total_r * total_p / (total_p + total_r)
             print("test slot f1: ", total_f1 / num_iterations)
 
     def viterbi(self, max_scores, max_scores_pre, length, predict_size=128):
@@ -555,7 +573,7 @@ class BILSTM_CRF(object):
             slot_f1 = 2.0 * (slot_precision * slot_recall) / (slot_precision + slot_recall)
         return results_BME, results_XYZ, results_UVW, intent_prediction, correct, count ,slot_precision,slot_recall,slot_f1
 
-    def evaluate(self, X, y_true, y_intent_true, y_pred, y_intent_pred, id2char, id2label):
+    def evaluate(self, X, y_true, y_intent_true, y_pred, y_intent_pred=None, id2char=None, id2label=None):
         precision = -1.0
         recall = -1.0
         f1 = -1.0
@@ -587,7 +605,8 @@ class BILSTM_CRF(object):
             recall = 1.0 * hit_num / true_num
         if precision > 0 and recall > 0:
             f1 = 2.0 * (precision * recall) / (precision + recall)
-        for i in range(len(y_intent_true)):
+        if y_intent_pred!=None:
+          for i in range(len(y_intent_true)):
             if y_intent_true[i]==y_intent_pred[i]:
                 correct+=1
             acc = 1.0*(correct)/len(y_intent_pred)

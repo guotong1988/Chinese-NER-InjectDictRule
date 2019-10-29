@@ -2,8 +2,8 @@ import time
 import helper
 import argparse
 import tensorflow as tf
-from BILSTM_CRF_ATTN_ELMO_NER import BILSTM_CRF
-
+from BILSTM_CRF_ATTN_NER import BILSTM_CRF
+from tensorflow.python.tools import freeze_graph
 # python test.py model test.in test.out -c char_emb -g 2
 
 parser = argparse.ArgumentParser()
@@ -63,12 +63,14 @@ with tf.Session(config=config) as sess:
                            num_steps=num_steps, embedding_matrix=embedding_matrix,
                            is_training=False,crf_flag=3,inputs=inputs,input_tag=input_tag)
 
+    predicts = tf.identity(tf.reshape(tf.cast(model.predicts, tf.float32), [-1]), name='predicts')
+
     from functools import reduce
     from operator import mul
 
     def get_num_params():
         num_params = 0
-        for variable in tf.trainable_variables():
+        for variable in tf.all_variables():
             shape = variable.get_shape()
             p = reduce(mul, [dim.value for dim in shape], 1)
             print(variable.name,p)
@@ -83,11 +85,33 @@ with tf.Session(config=config) as sess:
 
     print("testing")
     model.test(sess, X_test, X_test_str, X_test_tag, y_test_intent, y_test, output_path)
+    checkpoint_prefix = "predict_output"
+    output_graph_name = "output_graph_name"
+    input_graph_name = "input_graph_name"
+    # checkpoint_path = saver.save(sess, checkpoint_prefix + '_2/model',
+    #                              latest_filename="latest_filename")
+    # print(checkpoint_path)
+    tf.train.write_graph(sess.graph, logdir=checkpoint_prefix, name=input_graph_name)
+    input_graph_path = checkpoint_prefix+ "/" + input_graph_name
+
+    output_node_names = "predicts"
+    restore_op_name = "save/restore_all"
+    filename_tensor_name = "save/Const:0"
+    output_graph_path = checkpoint_prefix + '/' + output_graph_name
+    freeze_graph.freeze_graph(input_graph=input_graph_path,
+                              input_saver="",
+                              input_binary=False,
+                              input_checkpoint=checkpoint_prefix+"/model",
+                              output_node_names = output_node_names,
+                              restore_op_name=restore_op_name,
+                              filename_tensor_name=filename_tensor_name,
+                              output_graph=output_graph_path,
+                              clear_devices=True,
+                              initializer_nodes="")
 
     end_time = time.time()
     print("time used %f(hour)" % ((end_time - start_time) / 3600))
 
-    predicts = tf.identity(tf.reshape(tf.cast(model.predicts,tf.float32), [-1]), name='predicts')
 
     from tensorflow.contrib.session_bundle import exporter
     model_exporter = exporter.Exporter(saver)
@@ -103,7 +127,7 @@ with tf.Session(config=config) as sess:
                         })
 
     print("export model ...")
-    OUTPUT_MODEL_DIR = "cpp_model/cpp_model"
+    OUTPUT_MODEL_DIR = "cpp_model/cpp_model_pb"
     OUTPUT_MODEL_VERSION = 0
     model_exporter.export(OUTPUT_MODEL_DIR, tf.constant(OUTPUT_MODEL_VERSION), sess)
     print("export model Done.")
